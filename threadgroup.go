@@ -10,6 +10,7 @@ package threadgroup
 
 import (
 	"sync"
+	"context"
 
 	"gitlab.com/NebulousLabs/errors"
 )
@@ -29,7 +30,8 @@ type ThreadGroup struct {
 	afterStopFns []func() error
 
 	once     sync.Once
-	stopChan chan struct{}
+	stopChan context.Context
+	cancel   context.CancelFunc
 	bmu      sync.Mutex // Protects 'Add' and 'Wait'.
 	mu       sync.Mutex // Protects the 'onStopFns' and 'afterStopFns' variable
 	wg       sync.WaitGroup
@@ -37,14 +39,14 @@ type ThreadGroup struct {
 
 // init creates the stop channel for the thread group.
 func (tg *ThreadGroup) init() {
-	tg.stopChan = make(chan struct{})
+	tg.stopChan, tg.cancel = context.WithCancel(context.Background())
 }
 
 // isStopped will return true if Stop() has been called on the thread group.
 func (tg *ThreadGroup) isStopped() bool {
 	tg.once.Do(tg.init)
 	select {
-	case <-tg.stopChan:
+	case <-tg.stopChan.Done():
 		return true
 	default:
 		return false
@@ -119,7 +121,7 @@ func (tg *ThreadGroup) Stop() error {
 		return ErrStopped
 	}
 	tg.bmu.Lock()
-	close(tg.stopChan)
+	tg.cancel()
 	tg.bmu.Unlock()
 
 	// Flush any function that made it past isStopped and might be trying to do
@@ -148,7 +150,7 @@ func (tg *ThreadGroup) Stop() error {
 // StopChan provides read-only access to the ThreadGroup's stopChan. Callers
 // should select on StopChan in order to interrupt long-running reads (such as
 // time.After).
-func (tg *ThreadGroup) StopChan() <-chan struct{} {
+func (tg *ThreadGroup) StopChan() context.Context {
 	tg.once.Do(tg.init)
 	return tg.stopChan
 }
